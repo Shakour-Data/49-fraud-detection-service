@@ -1,0 +1,112 @@
+# ================================================================================
+# Docker Compose Configuration for 49-fraud-detection-service
+# ================================================================================
+# Following Gravity MicroServices standards from TEAM_PROMPT.md
+# - Service independence (own database, own Redis)
+# - Environment-based configuration
+# - Health checks for all services
+# - Named volumes for persistence
+# ================================================================================
+
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # PostgreSQL Database
+  # ==============================================================================
+  db:
+    image: postgres:16-alpine
+    container_name: 49-fraud-detection-service-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-fraud_detection}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "${DB_PORT:-5449}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - fraud-detection-service-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ==============================================================================
+  # Redis Cache
+  # ==============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: 49-fraud-detection-service-redis
+    ports:
+      - "${REDIS_PORT:-6349}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - fraud-detection-service-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ==============================================================================
+  # Application Service
+  # ==============================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 49-fraud-detection-service-app
+    environment:
+      # Database
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-fraud_detection}
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      
+      # Application
+      APP_NAME: 49-fraud-detection-service
+      DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      
+      # Port
+      PORT: ${APP_PORT:-8000}
+    ports:
+      - "${APP_PORT:-8049}:8000"
+    volumes:
+      - ./app:/app/app:ro
+    networks:
+      - fraud-detection-service-net
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+# ==============================================================================
+# Networks
+# ==============================================================================
+networks:
+  fraud-detection-service-net:
+    driver: bridge
+    name: 49-fraud-detection-service-network
+
+# ==============================================================================
+# Volumes
+# ==============================================================================
+volumes:
+  postgres_data:
+    name: 49-fraud-detection-service-postgres-data
+  redis_data:
+    name: 49-fraud-detection-service-redis-data
